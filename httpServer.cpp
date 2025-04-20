@@ -1,4 +1,5 @@
 #include <sstream>
+#include <regex>
 #include <fstream>
 #include <iostream>
 #include <sys/socket.h>
@@ -91,7 +92,8 @@ public:
         POST
     };
 
-    HttpRequest(std::string request) {
+    HttpRequest(int client_sockfd, std::string request) {
+        this->client_sockfd = client_sockfd;
         std::stringstream ss(request);
         std::string m;
         ss >> m >> requestTarget >> protocol;
@@ -100,16 +102,26 @@ public:
         }
         else if (m == "POST") {
             method = Method::POST;
+            // Look for body Content-Length
+            std::regex contentLengthRegex(R"(Content-Length:\s*(\d+))", std::regex::icase);
+            std::smatch match;
+            int contentLength = 0;
+            if (std::regex_search(request, match, contentLengthRegex)) {
+                std::string lengthStr = match[1];
+                contentLength = std::stoi(lengthStr);
+                std::cout << "Content-Length: " << contentLength << std::endl;
+            }
+            // Receive contentLength bytes from client_sockfd
+            char buf[contentLength];
+            if (recv(client_sockfd, buf, contentLength, 0) == -1) {
+                std::cerr << "Error reading from socket" << std::endl;
+                return;
+            }
+            body = std::string(buf, contentLength);
         }
         else {
             std::cerr << "Invalid request method" << std::endl;
         }
-        // std::string line;
-        // while (std::getline(ss, line)) {
-        //     if (line == "") {
-        //         break;
-        //     }
-        // }
     }
 
     Method getMethod() const {
@@ -124,8 +136,13 @@ public:
         return protocol;
     }
 
+    std::string getBody() const {
+        return body;
+    }
+
 private:
     Method method;
+    int client_sockfd;
     std::string requestTarget;
     std::string protocol;
     // std::map<std::string, std::string> headers;
@@ -151,14 +168,13 @@ public:
     HttpResponse(int client_sockfd, const HttpRequest& request) : client_sockfd(client_sockfd), request(request) {}
 
     void sendResponse(int code, const std::string& body) const {
-        // TODO: based on request
         std::string response = 
             "HTTP/1.1 " + std::to_string(code) + " " + httpStatusMessages.at(code) + "\r\n"
             "Content-Type: text/html; charset=UTF-8\r\n"
+            "Connection: close\r\n"
             "Content-Length: " + std::to_string(body.size()) + "\r\n"
             "\r\n" +
             body;
-
         send(client_sockfd, response.c_str(), response.length(), 0);
     }
 
@@ -232,7 +248,7 @@ public:
                 }
                 request += buf;
             }
-            HttpRequest httpRequest(request);
+            HttpRequest httpRequest(client_sockfd, request);
             // std::cout << request << std::endl;
             HttpResponse httpResponse(client_sockfd, httpRequest);
             if (httpRequest.getMethod() == HttpRequest::Method::GET) {
@@ -240,22 +256,25 @@ public:
                 std::cout << "Requested: " << path << std::endl;
                 if (httpRequest.getRequestTarget() == "/") {
                     std::cout << "Requested index file" << std::endl;
-                    path = "/index.html";
+                    path = "/index";
                 }
-                std::ifstream file(HTML_FOLDER + path);
+                std::ifstream file(HTML_FOLDER + path + ".html");
+                std::ostringstream ss;
                 if (!file.is_open()) {
                     // Send 404 error        
                     std::cout << "Requested file not found" << std::endl;
-                    httpResponse.sendResponse(404, "file not found");
+                    std::ifstream file404(HTML_FOLDER + "/404.html");
+                    ss << file404.rdbuf();
+                    httpResponse.sendResponse(404, ss.str());
                     continue;
                 }
-                std::ostringstream ss;
                 ss << file.rdbuf();
                 httpResponse.sendResponse(200, ss.str());
             }
-
-            // std::cout << "Request type: " << httpRequest.getMethod() << std::endl;
-            // std::cout << "Request target: " << httpRequest.getRequestTarget() << std::endl;
+            else if (httpRequest.getMethod() == HttpRequest::Method::POST) {
+                std::cout << "Received POST request" << std::endl;
+                std::cout << httpRequest.getBody() << std::endl;
+            }
             close(client_sockfd);
         }
     }
