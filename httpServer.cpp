@@ -10,6 +10,7 @@
 #include <string>
 
 const std::string HTML_FOLDER = "../html";
+const std::string STATIC = "../static/";
 
 const std::unordered_map<int, std::string> httpStatusMessages = {
     // 1xx Informational
@@ -89,11 +90,11 @@ class HttpRequest {
 public:
     enum class Method {
         GET,
-        POST
+        POST,
+        INVALID
     };
 
-    HttpRequest(int client_sockfd, std::string request) {
-        this->client_sockfd = client_sockfd;
+    HttpRequest(int client_sockfd, std::string request) : client_sockfd(client_sockfd) {
         std::stringstream ss(request);
         std::string m;
         ss >> m >> requestTarget >> protocol;
@@ -102,25 +103,36 @@ public:
         }
         else if (m == "POST") {
             method = Method::POST;
-            // Look for body Content-Length
-            std::regex contentLengthRegex(R"(Content-Length:\s*(\d+))", std::regex::icase);
-            std::smatch match;
-            int contentLength = 0;
-            if (std::regex_search(request, match, contentLengthRegex)) {
-                std::string lengthStr = match[1];
-                contentLength = std::stoi(lengthStr);
-                std::cout << "Content-Length: " << contentLength << std::endl;
-            }
+        }
+        else {
+            std::cerr << "Invalid request method" << std::endl;
+            method = Method::INVALID;
+            return;
+        }
+
+        // Look for body Content-Length
+        std::regex contentLengthRegex(R"(Content-Length:\s*(\d+))", std::regex::icase);
+        std::smatch match;
+        if (std::regex_search(request, match, contentLengthRegex)) {
+            std::string lengthStr = match[1];
+            int contentLength = std::stoi(lengthStr);
+            std::cout << "Content-Length: " << contentLength << std::endl;
             // Receive contentLength bytes from client_sockfd
             char buf[contentLength];
             if (recv(client_sockfd, buf, contentLength, 0) == -1) {
                 std::cerr << "Error reading from socket" << std::endl;
                 return;
             }
-            body = std::string(buf, contentLength);
+
+            // Only parse body with key=value&key2=value2
+            std::string bodyStr = std::string(buf, contentLength);
+            body = parseBody(bodyStr);
         }
-        else {
-            std::cerr << "Invalid request method" << std::endl;
+
+        // Get user agent
+        std::regex userAgentRegex(R"(User-Agent:\s*(.*))", std::regex::icase);
+        if (std::regex_search(request, match, userAgentRegex)) {
+            userAgent = match[1];
         }
     }
 
@@ -136,8 +148,12 @@ public:
         return protocol;
     }
 
-    std::string getBody() const {
+    const std::unordered_map<std::string, std::string>& getBody() const {
         return body;
+    }
+
+    std::string getUserAgent() const {
+        return userAgent;
     }
 
 private:
@@ -145,8 +161,24 @@ private:
     int client_sockfd;
     std::string requestTarget;
     std::string protocol;
-    // std::map<std::string, std::string> headers;
-    std::string body;
+    std::string userAgent;
+    std::unordered_map<std::string, std::string> body;
+
+    std::unordered_map<std::string, std::string> parseBody(const std::string& bodyStr) {
+        // Only parse body with key=value&key2=value2...
+        std::unordered_map<std::string, std::string> ret;
+        std::istringstream ss(bodyStr);
+        std::string pair;
+        while (std::getline(ss, pair, '&')) {
+            std::size_t pos = pair.find('=');
+            if (pos != std::string::npos) {
+                std::string key = pair.substr(0, pos);
+                std::string value = pair.substr(pos + 1);
+                ret[key] = value;
+            }
+        }
+        return ret;
+    }
 };
 
 inline std::ostream& operator<<(std::ostream& os, HttpRequest::Method method) {
@@ -176,6 +208,33 @@ public:
             "\r\n" +
             body;
         send(client_sockfd, response.c_str(), response.length(), 0);
+    }
+
+    void sendFile(int code, const std::string& path, const std::string& filename) const {
+        std::ifstream file(path, std::ios::binary);
+
+        std::stringstream ss;
+        if (file) {
+            ss << file.rdbuf();
+            std::string body = ss.str();
+
+            std::string response = 
+                "HTTP/1.1 " + std::to_string(code) + " " + httpStatusMessages.at(code) + "\r\n"
+                "Content-Type: application/octet-stream\r\n"
+                "Content-Disposition: attachment; filename=\"" + filename + "\"\r\n"
+                "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                "Connection: close\r\n"
+                "\r\n" +
+                body;
+
+            send(client_sockfd, response.c_str(), response.length(), 0);
+        }
+        else {
+            std::ifstream file404(HTML_FOLDER + "/404.html");
+            ss << file404.rdbuf();
+            sendResponse(404, ss.str());
+        }
+
     }
 
 private:
@@ -254,6 +313,24 @@ public:
             if (httpRequest.getMethod() == HttpRequest::Method::GET) {
                 std::string path = httpRequest.getRequestTarget();
                 std::cout << "Requested: " << path << std::endl;
+
+                if (httpRequest.getRequestTarget() == "/user-agent") {
+                    httpResponse.sendResponse(200, httpRequest.getUserAgent()); 
+                    continue;
+                }
+
+                // If path starts with /static, look in static folder
+                if (httpRequest.getRequestTarget().find("/static") == 0) {
+                    // Find the next /
+                    std::size_t pos = httpRequest.getRequestTarget().find("/", 1);
+                    // Substring from the next /
+                    std::string file = httpRequest.getRequestTarget().substr(pos + 1);
+                    path = STATIC + file;
+                    std::cout << path << std::endl;
+                    httpResponse.sendFile(200, path, file);
+                    continue;
+                }
+
                 if (httpRequest.getRequestTarget() == "/") {
                     std::cout << "Requested index file" << std::endl;
                     path = "/index";
@@ -273,7 +350,12 @@ public:
             }
             else if (httpRequest.getMethod() == HttpRequest::Method::POST) {
                 std::cout << "Received POST request" << std::endl;
-                std::cout << httpRequest.getBody() << std::endl;
+                std::unordered_map<std::string, std::string> body = httpRequest.getBody();
+                std::string response = "You entered: <br>";
+                for (const auto& [key, value] : body) {
+                    response += key + ": " + value + "<br>";
+                }
+                httpResponse.sendResponse(200, response);
             }
             close(client_sockfd);
         }
