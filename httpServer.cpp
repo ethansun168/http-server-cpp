@@ -199,10 +199,10 @@ class HttpResponse {
 public:
     HttpResponse(int client_sockfd, const HttpRequest& request) : client_sockfd(client_sockfd), request(request) {}
 
-    void sendResponse(int code, const std::string& body) const {
+    void sendResponse(int code, const std::string& body, const std::string& contentType) const {
         std::string response = 
             "HTTP/1.1 " + std::to_string(code) + " " + httpStatusMessages.at(code) + "\r\n"
-            "Content-Type: text/html; charset=UTF-8\r\n"
+            "Content-Type: " + contentType + "; charset=UTF-8\r\n"
             "Connection: close\r\n"
             "Content-Length: " + std::to_string(body.size()) + "\r\n"
             "\r\n" +
@@ -232,7 +232,7 @@ public:
         else {
             std::ifstream file404(HTML_FOLDER + "/404.html");
             ss << file404.rdbuf();
-            sendResponse(404, ss.str());
+            sendResponse(404, ss.str(), "text/html");
         }
 
     }
@@ -314,20 +314,27 @@ public:
                 std::string path = httpRequest.getRequestTarget();
                 std::cout << "Requested: " << path << std::endl;
 
-                if (httpRequest.getRequestTarget() == "/user-agent") {
-                    httpResponse.sendResponse(200, httpRequest.getUserAgent()); 
+                if (path == "/user-agent") {
+                    httpResponse.sendResponse(200, httpRequest.getUserAgent(), "text/html"); 
                     continue;
                 }
 
                 // If path starts with /static, look in static folder
-                if (httpRequest.getRequestTarget().find("/static") == 0) {
+                if (path.starts_with("/static")) {
                     // Find the next /
                     std::size_t pos = httpRequest.getRequestTarget().find("/", 1);
                     // Substring from the next /
-                    std::string file = httpRequest.getRequestTarget().substr(pos + 1);
-                    path = STATIC + file;
-                    std::cout << path << std::endl;
-                    httpResponse.sendFile(200, path, file);
+                    std::string filename = httpRequest.getRequestTarget().substr(pos + 1);
+                    path = STATIC + filename;
+                    if (path.ends_with(".css")) {
+                        std::ifstream file(path);
+                        std::stringstream ss;
+                        ss << file.rdbuf();
+                        httpResponse.sendResponse(200, ss.str(), "text/css");
+                    }
+                    else {
+                        httpResponse.sendFile(200, path, filename);
+                    }
                     continue;
                 }
 
@@ -342,11 +349,11 @@ public:
                     std::cout << "Requested file not found" << std::endl;
                     std::ifstream file404(HTML_FOLDER + "/404.html");
                     ss << file404.rdbuf();
-                    httpResponse.sendResponse(404, ss.str());
+                    httpResponse.sendResponse(404, ss.str(), "text/html");
                     continue;
                 }
                 ss << file.rdbuf();
-                httpResponse.sendResponse(200, ss.str());
+                httpResponse.sendResponse(200, ss.str(), "text/html");
             }
             else if (httpRequest.getMethod() == HttpRequest::Method::POST) {
                 std::cout << "Received POST request" << std::endl;
@@ -355,7 +362,7 @@ public:
                 for (const auto& [key, value] : body) {
                     response += key + ": " + value + "<br>";
                 }
-                httpResponse.sendResponse(200, response);
+                httpResponse.sendResponse(200, response, "text/html");
             }
             close(client_sockfd);
         }
