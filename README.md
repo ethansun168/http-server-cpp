@@ -5,7 +5,7 @@ mkdir build && cd build && cmake ..
 make
 ./server [port]
 ```
-- Navigate to localhost:port in the browser
+- Navigate to `localhost:port` in the browser
 
 ## Features
 - Serve HTML and CSS files

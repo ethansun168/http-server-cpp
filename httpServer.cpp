@@ -98,7 +98,18 @@ public:
     HttpRequest(int client_sockfd, std::string request) : client_sockfd(client_sockfd) {
         std::stringstream ss(request);
         std::string m;
-        ss >> m >> requestTarget >> protocol;
+        std::string fullRequestTarget;
+        ss >> m >> fullRequestTarget >> protocol;
+        // Parse request target: /path/to/file?query
+        size_t pos = fullRequestTarget.find('?');
+        if (pos != std::string::npos) {
+            requestTarget = fullRequestTarget.substr(0, pos);
+            query = fullRequestTarget.substr(pos + 1, std::string::npos);
+        }
+        else {
+            requestTarget = fullRequestTarget;
+        }
+
         if (m == "GET") {
             method = Method::GET;
         }
@@ -145,6 +156,10 @@ public:
         return requestTarget;
     }
 
+    std::string getQuery() const {
+        return query;
+    }
+
     std::string getProtocol() const {
         return protocol;
     }
@@ -161,6 +176,7 @@ private:
     Method method;
     int client_sockfd;
     std::string requestTarget;
+    std::string query;
     std::string protocol;
     std::string userAgent;
     std::unordered_map<std::string, std::string> body;
@@ -321,7 +337,7 @@ public:
                 }
 
                 // If path starts with /static or /js, look in static folder
-                if (path.starts_with("/static") || path.starts_with("/js")) {
+                if (path.starts_with("/static") || path.starts_with("/js") || path.starts_with("/css")) {
                     // Find the next /
                     std::size_t pos = httpRequest.getRequestTarget().find("/", 1);
                     // Substring from the next /
@@ -351,7 +367,11 @@ public:
                     std::cout << "Requested index file" << std::endl;
                     path = "/index";
                 }
-                std::ifstream file(HTML_FOLDER + path + ".html");
+                std::string fullPath = HTML_FOLDER + path;
+                if (!fullPath.ends_with(".html")) {
+                    fullPath += ".html";
+                }
+                std::ifstream file(fullPath);
                 std::ostringstream ss;
                 if (!file.is_open()) {
                     // Send 404 error
