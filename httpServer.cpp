@@ -11,6 +11,7 @@
 
 const std::string HTML_FOLDER = "../html";
 const std::string STATIC = "../static/";
+const std::string JS = "../js/";
 
 const std::unordered_map<int, std::string> httpStatusMessages = {
     // 1xx Informational
@@ -319,20 +320,28 @@ public:
                     continue;
                 }
 
-                // If path starts with /static, look in static folder
-                if (path.starts_with("/static")) {
+                // If path starts with /static or /js, look in static folder
+                if (path.starts_with("/static") || path.starts_with("/js")) {
                     // Find the next /
                     std::size_t pos = httpRequest.getRequestTarget().find("/", 1);
                     // Substring from the next /
                     std::string filename = httpRequest.getRequestTarget().substr(pos + 1);
-                    path = STATIC + filename;
                     if (path.ends_with(".css")) {
+                        path = STATIC + filename;
                         std::ifstream file(path);
                         std::stringstream ss;
                         ss << file.rdbuf();
                         httpResponse.sendResponse(200, ss.str(), "text/css");
                     }
+                    else if (path.ends_with(".js")) {
+                        path = JS + filename;
+                        std::ifstream file(path);
+                        std::stringstream ss;
+                        ss << file.rdbuf();
+                        httpResponse.sendResponse(200, ss.str(), "application/javascript");
+                    }
                     else {
+                        path = STATIC + filename;
                         httpResponse.sendFile(200, path, filename);
                     }
                     continue;
@@ -345,7 +354,7 @@ public:
                 std::ifstream file(HTML_FOLDER + path + ".html");
                 std::ostringstream ss;
                 if (!file.is_open()) {
-                    // Send 404 error        
+                    // Send 404 error
                     std::cout << "Requested file not found" << std::endl;
                     std::ifstream file404(HTML_FOLDER + "/404.html");
                     ss << file404.rdbuf();

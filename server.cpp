@@ -1,6 +1,5 @@
 #include "httpServer.cpp"
 
-
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         std::cout << "Usage: ./server [port]"  << std::endl;
